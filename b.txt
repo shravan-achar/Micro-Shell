@@ -1,0 +1,14 @@
+a.txt
+b.txt
+main.c
+main.o
+Makefile
+out.txt
+parse.c
+parse.h
+parse.o
+README
+t1
+t1.c
+ush
+lcat: -: Input/output error
