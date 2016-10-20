@@ -43,6 +43,10 @@ static void runCmd(Cmd c, int * prev, int * next)
 				close(prev[0]);
 				close(prev[1]);
 				break;
+                        case Tin:
+                               flags = O_RDONLY;
+                               fileRedir(c, flags);
+                               break;
 		}
 
 		switch (c->out) { 
