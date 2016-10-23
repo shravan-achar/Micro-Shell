@@ -20,6 +20,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
+#include <stdlib.h>
+#include <assert.h>
+#include <unistd.h>
 
 #define _GNU_SOURCE
 
@@ -39,6 +42,9 @@ struct cmd_t {
   char *infile, *outfile;	/* set if file redirection */
   int nargs, maxargs;		/* num args in args array below (and size) */
   char **args;			/* argv array -- suitable for execv(1) */
+  pid_t pid;
+  char completed;         /*Could be completed or terminated*/      
+  char stopped;                  /*Could be blocked or suspended*/
   struct cmd_t *next;
 };
 typedef struct cmd_t *Cmd;
@@ -54,10 +60,56 @@ struct pipe_t {
   Cmd head;
   struct pipe_t *next;
 };
+
 typedef struct pipe_t *Pipe;
+
+typedef enum {Running, Stopped, Done, Terminated, Killed} Status;
+struct jobs_t {
+    int number; /* Job number*/ 
+    pid_t pgid; /*Process group ID*/
+    Pipe first; /*First pipe*/
+    struct jobs_t *next; /*Next job*/
+    char user_updated; /*Status is updated to the user*/    
+    char * command;
+    Status status;
+};
+
+typedef struct jobs_t * Job;
+Job first;
+pid_t par_pgid; /*Same as parent(ushell) pid*/
+int shell_interactive;
+char * command_str;
+extern char **environ;
 
 void freePipe(Pipe);
 Pipe parse();
+void prCmd(Cmd c, Job j, char *buf);
+void enable_signals();
+void disable_signals();
 void fileRedir(Cmd c, int flags);
+int is_job_completed(Job j);
+int is_job_stopped(Job j);
+int get_job_number();
+int is_job_fg(Job j);
+void run_in_fg(Job j);
+void run_in_bg(Job j);
+int change_proc_status(pid_t pid, int status);
+char * getcommand(Job j);
+void clean_finished_jobs();
+void wait_fg(Job j);
+void wait_bg();
+Job create_job(Pipe p);
+int background(Job j);
+int foreground(Job j);
+void echo_c(Cmd c);
+void whereis(Cmd c);
+void pwd_c(Cmd c);
+int set_env(Cmd c);
+int unset_env(Cmd c);
+int killjob(Job j);
+void list_jobs();
+void log_out();
+int change_dir(Cmd c);
+
 #endif /* PARSE_H */
 /*........................ end of parse.h ...................................*/

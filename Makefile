@@ -4,8 +4,8 @@
 # 
 
 CC=gcc
-CFLAGS=-g
-SRC=main.c parse.c utilities.c parse.h
+CFLAGS=-g -Wall
+SRC=main.c parse.c utilities.c
 OBJ=main.o parse.o utilities.o
 
 ush:	$(OBJ)
