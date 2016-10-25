@@ -10,6 +10,8 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <termios.h>
 #include "parse.h"
 
 static void handle_exec_error() 
@@ -17,10 +19,10 @@ static void handle_exec_error()
     switch(errno) {
 
 	case EPERM: 
-	    printf("permission denied\n");
+	    fprintf(stderr, "permission denied\n");
 	    break;
 	case ENOENT:
-	    printf("command not found\n");
+	    fprintf(stderr, "command not found\n");
 	    break;
     }
 
@@ -41,20 +43,23 @@ static void runCmd(Cmd c, int * prev, int * next, Job j)
 	    if (!j->pgid) j->pgid = pid;
 	    setpgid(pid, j->pgid);
 	}
+    c->pid = pid;
 
 	/*Child can receive all signals*/
+    //if (is_job_fg(j))
 	enable_signals();
-	switch (c->in) {
+	
+    switch (c->in) {
 	    case Tpipe:
 	    case TpipeErr:
-		dup2(prev[0], 0);
-		close(prev[0]);
-		close(prev[1]);
-		break;
-	    case Tin:
-		flags = O_RDONLY;
-		fileRedir(c, flags);
-		break;
+            dup2(prev[0], 0);
+            close(prev[0]);
+            close(prev[1]);
+            break;
+        case Tin:
+            flags = O_RDONLY;
+            fileRedir(c, flags);
+            break;
 	    default:
 		break;
 
@@ -90,7 +95,13 @@ static void runCmd(Cmd c, int * prev, int * next, Job j)
 	    default:
 		break;
 	}
-	if (execvp(c->args[0], c->args) < 0) handle_exec_error();
+    if (is_cmd_builtin(c)) {
+        execute_builtin(c, j); 
+        _exit(EXIT_SUCCESS);
+    }
+    else {
+        if(execvp(c->args[0], c->args) < 0) handle_exec_error();
+    }
 
     } else { 
 	c->pid = cpid;
@@ -107,8 +118,6 @@ static void runCmd(Cmd c, int * prev, int * next, Job j)
 	    close(prev[0]);
 	    close(prev[1]);
 	}
-	
-	
     }
 }
 
@@ -117,14 +126,39 @@ static void wait_all(Job j)
     wait_fg(j);
 }
 
+int is_cmd_builtin(Cmd c)
+{
+    int i;
+    char *list[12] = {"bg", "fg", "cd","pwd","echo","jobs","kill","logout","nice","where", "setenv", "unsetenv"};
+    for (i = 0; i < 12; i++)
+    {
+        if (!strcmp(c->args[0], list[i])) 
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 void prCmd(Cmd c, Job j, char *buf)
 {
     int i;
-
+    i = 0;
+    builtin = is_cmd_builtin(c);
+    
     if ( c ) {
 	sprintf(buf + strlen(buf), "%s%s ", c->exec == Tamp ? "BG " : "", c->args[0]);
-	if ( c->in == Tin )
+    if (j && is_job_fg(j)) {
+        j->fg = 1; }
+	
+    if ( c->nargs > 1 ) {
+	    sprintf(buf + strlen(buf),"[");
+	    for ( i = 1; c->args[i] != NULL; i++ )
+		sprintf(buf + strlen(buf),"%d:%s,", i, c->args[i]);
+	    sprintf(buf + strlen(buf),"\b]");
+	}
+	
+    if ( c->in == Tin )
 	    sprintf(buf + strlen(buf), "<(%s) ", c->infile);
 	if ( c->out != Tnil )
 	    switch ( c->out ) {
@@ -151,52 +185,112 @@ void prCmd(Cmd c, Job j, char *buf)
 		    exit(-1);
 	    }
 
-	if ( c->nargs > 1 ) {
-	    sprintf(buf + strlen(buf),"[");
-	    for ( i = 1; c->args[i] != NULL; i++ )
-		sprintf(buf + strlen(buf),"%d:%s,", i, c->args[i]);
-	    sprintf(buf + strlen(buf),"\b]");
-	}
-	
-	if (c->out == Tnil) {
-	    if (!strcmp(c->args[0], "end") )
-		exit(0);
-	    if (!strcmp(c->args[0], "bg"))
-		background(j);
-	    if (!strcmp(c->args[0], "fg" ))
-		foreground(j);
-	    if (!strcmp(c->args[0], "setenv" ))
-		set_env(c);
-	    if (!strcmp(c->args[0], "unsetenv" ))
-		unset_env(c);
-	    if (!strcmp(c->args[0], "jobs" ))
-		list_jobs();
-	    if (!strcmp(c->args[0], "kill" ))
-		killjob(j);
-	    if (!strcmp(c->args[0], "where" ))
-		whereis(c);
-	    if (!strcmp(c->args[0], "logout" ))
-		log_out();
-	    if (!strcmp(c->args[0], "cd" ))
-		change_dir(c);
-	    //if (!strcmp(c->args[0], "echo" ))
-	//	echo_c(c);
-	 //   if (!strcmp(c->args[0], "pwd" ))
-	//	pwd_c(c);
-	}	
-	//TODO builtins
+	if (builtin && c->out != Tpipe && c->out != TpipeErr) {
+        execute_builtin(c, j);
+    } else {
+        if (builtin) builtin = 0;
+    }	
 
 	//runCmd(c, prev, next);
     }
 }
+
+void execute_builtin(Cmd c, Job j)
+{
+    int rc = 0;
+    if (!strcmp(c->args[0], "end") )
+        exit(0);
+    if (!strcmp(c->args[0], "bg"))
+        background(find_job(c->args[1]));
+    if (!strcmp(c->args[0], "fg" )) {
+        foreground(find_job(c->args[1]));
+    }
+    if (!strcmp(c->args[0], "setenv" ))
+        rc = set_env(c);
+    if (!strcmp(c->args[0], "unsetenv" ))
+        rc = unset_env(c);
+    if (!strcmp(c->args[0], "jobs" ))
+        list_jobs();
+    if (!strcmp(c->args[0], "kill" ))
+        killjob(find_job(c->args[1]));
+    if (!strcmp(c->args[0], "where" ))
+        whereis(c);
+    if (!strcmp(c->args[0], "logout" ))
+        log_out();
+    if (!strcmp(c->args[0], "cd" ))
+        rc = change_dir(c);
+    if (!strcmp(c->args[0], "echo" ))
+        echo_c(c);
+    if (!strcmp(c->args[0], "pwd" ))
+        pwd_c(c);
+    if (!strcmp(c->args[0], "nice" ))
+        niceness(c);
+    if (j) j->first->head->completed = 1;
+    if (rc < 0) fprintf(stderr, "%s\n", strerror(errno));
+
+}
 void echo_c(Cmd c)
 {
-    execvp("/bin/echo", c->args);
+    char buf[100];
+    memset(buf, 0, 100);
+    int n = c->nargs - 1;
+    while(n)
+    {
+        sprintf(buf+strlen(buf),"%s ",c->args[c->nargs - n]);
+        n--;
+
+    }
+    printf("%s\n", buf);
 }
 
 void pwd_c(Cmd c)
 {
-    execvp("/bin/pwd",c->args);
+    char * cur_dir = calloc(1, 128);
+    getcwd(cur_dir, 128);
+    printf("%s\n", cur_dir);
+    free(cur_dir);
+}
+
+int niceness(Cmd c)
+{
+    int status, rc = 0;
+    pid_t pid;
+    int num, nowait = 0;
+
+    if (c->exec == Tamp){
+        nowait = 1;
+    }
+
+
+    if (c->nargs == 1)
+    {
+        rc = setpriority(PRIO_PROCESS, getpid(), 4);
+        return rc;
+    } 
+    else {
+        sscanf(c->args[1], "%d", &num);
+        if (c->nargs == 2){
+            rc = setpriority(PRIO_PROCESS, getpid(), num);
+            return rc;
+
+        }
+        else {
+            pid = fork();
+            if (pid < 0) return -1;
+            if (pid == 0) {
+                rc = setpriority(PRIO_PROCESS, getpid(), num); 
+                execvp(c->args[2], &(c->args[2]));
+            }
+            else {
+                if (nowait)
+                    waitpid(pid, &status, WUNTRACED | WNOHANG);
+                else
+                    waitpid(pid, &status, WUNTRACED);
+                if (pid > 0) change_proc_status(pid, status);
+            }
+        }
+    }
+    return rc;
 }
 
 int change_dir(Cmd c)
@@ -239,35 +333,56 @@ int unset_env(Cmd c)
 void list_jobs()
 {
     Job j;
+    if (first->next == NULL) {
+        first->first->head->completed = 1;
+        return;  /*There are no jobs since 'jobs' command is the only job*/
+    }
+    
     for (j = first; j; j = j->next)
     {
-
-	    fprintf(stdout, "[%ld] \t %d \t\t %s\n", (long)j->number, j->status, j->command);
+//        next = j->next;
+//        if (next) 
+//        {
+            if(is_job_stopped(j) && j->status != Killed)
+                fprintf(stdout, "[%ld] \t Stopped \t\t %s\n", (long)j->number, j->command);
+            else if(is_job_completed(j) && j->fg == 0)
+                fprintf(stdout, "[%ld] \t Done \t\t %s\n", (long)j->number, j->command);
+            else if(j->fg == 1 && j->pgid != 0 && j->status != Killed)
+                fprintf(stdout, "[%ld] \t Running \t\t %s\n", (long)j->number, j->command);
+            else if(j->fg == 0 && j->status != Killed) 
+                fprintf(stdout, "[%ld] \t Running \t\t %s\n", (long)j->number, j->command);
+            else if(j->status == Killed)
+                fprintf(stdout, "[%ld] \t Terminated \t\t %s\n", (long)j->number, j->command);
+  //      }
 
     }
+    return;
 
 }
 
 int foreground(Job j)
 {
+   if (j == NULL) return -1;
    tcsetpgrp(0, j->pgid);
 
    if (j->status != Running)
-    {
-	if (kill (-j->pgid, SIGCONT) < 0) {
-	    perror("SIGCONT");
-	    return -1;
-	}
-	j->status = Running;
-    }
+   {
+       if (kill (-j->pgid, SIGCONT) < 0) {
+           perror("SIGCONT");
+           return -1;
+       }
+       j->status = Running;
+   }
    wait_fg(j);
    j->status = Done;
    tcsetpgrp(0, par_pgid);
+
    return 0;
 }
 
 int background(Job j)
 {
+    if (j == NULL) return -1;
 /* This can be called when a process is stopped. SIGCONT is sent*/
     if (kill(-j->pgid, SIGCONT) < 0) 
     {
@@ -280,10 +395,11 @@ int background(Job j)
 
 int killjob (Job j)
 {
+    if (j == NULL) return -1;
     if (kill(-j->pgid, SIGKILL) < 0)
     {
-	perror("SIGKILL");
-	return -1;
+        perror("SIGKILL");
+        return -1;
     }
     j->status = Killed;
     return 0;
@@ -298,16 +414,26 @@ void whereis(Cmd c)
 {
     char *list[12] = {"bg", "fg", "cd","pwd","echo","jobs","kill","logout","nice","where", "setenv", "unsetenv"};
 int i;
+pid_t pid;
+int status;
 
-for (i = 0; i < 10; i++)
+for (i = 0; i < 12; i++)
 {
     if(!strcmp(c->args[1], list[i])) {
-	printf("%s: shell built-in command;", list[i]);
+        printf("%s: shell built-in command\n", list[i]);
+        return;
     }
 }
 
-execvp("/usr/bin/which", c->args);
+pid = fork();
+if (pid < 0) return;
+if(pid == 0) execvp("/usr/bin/which", c->args);
+else 
+{
+    waitpid(pid, &status, WUNTRACED);
+    if (pid > 0) change_proc_status(pid, status);
 
+}
 }
 
 void sig_handler(int signo)
@@ -321,17 +447,17 @@ void enable_signals(void)
     signal (SIGTSTP, SIG_DFL);
     signal (SIGTTIN, SIG_DFL);
     signal (SIGTTOU, SIG_DFL);
-    signal (SIGCHLD, SIG_DFL);
+    signal (SIGHUP, SIG_DFL);
 }
 void disable_signals(void) 
 {
 
-//    signal (SIGINT, SIG_IGN);
-//    signal (SIGQUIT, SIG_IGN);
+    //signal (SIGINT, SIG_IGN);
+    signal (SIGQUIT, SIG_IGN);
     signal (SIGTSTP, SIG_IGN);
     signal (SIGTTIN, SIG_IGN);
     signal (SIGTTOU, SIG_IGN);
-//    signal (SIGCHLD, SIG_IGN);
+    signal (SIGHUP, SIG_IGN);
 }
 
 static void prPipe(Pipe p, Job j)
@@ -358,28 +484,33 @@ static void prPipe(Pipe p, Job j)
 	    y = pipefd[i];
 	}
 	prCmd(c,j,command_str);
-	runCmd(c, x, y, j);
+    if (!builtin)
+	    runCmd(c, x, y, j);
     }
     //printf("End pipe\n");
     if (!j) {
-	while(waitpid(-1, &status, WUNTRACED) != -1);
-	prPipe(p->next, NULL);
+        while(waitpid(-1, &status, WUNTRACED) != -1);
+        prPipe(p->next, NULL);
     } 
 }
 
 static void prJob(Job j)
 {
-    Pipe p;
     if(j == NULL) return;
     memset(command_str, 0, strlen(command_str));
-    for (p = j->first; p; p = p->next) prPipe(p, j);
-    j->command = command_str;
-	
+    //for (p = j->first; p; p = p->next) prPipe(p, j);
+    prPipe(j->first , j);
+    memcpy(j->command, command_str, strlen(command_str) + 1);
+    //j->command[strlen(command_str)] = '\0';	
+    
+    if(is_job_stopped(j) || is_job_completed(j)) 
+        return;
+
     /*This must be done when ush reads ~/.ushrc*/
     if (!shell_interactive) wait_all(j);
 
     /*Interactive shell*/
-    else if (is_job_fg(j)) run_in_fg(j);
+    else if (j->fg) run_in_fg(j);
     else run_in_bg(j);
 
 }
@@ -388,6 +519,7 @@ int main(int argc, char *argv[])
 {
     Job j = NULL;
     Pipe p = NULL;
+    shell_term = STDIN_FILENO;
     char *host = getenv("USER");
     shell_interactive = 0;
     command_str = calloc(1, 512);
@@ -396,47 +528,60 @@ int main(int argc, char *argv[])
 
     /* Initialize shell and read from ~/.ushrc*/
     int rc_fd = -1;
-    rc_fd = open("/home/shravan/.ushrc", O_RDONLY);
-    FILE * fp = fdopen(rc_fd, "r");
+    char * home = getenv("HOME");
+    char *ushrc = NULL;
+    if (home) {
+        ushrc = calloc(1, strlen(home) + 9);
+        snprintf(ushrc, strlen(home) + 8, "%s/.ushrc", home);
+    }
+    else {
+        ushrc = calloc(1, 9);
+        snprintf(ushrc, 8, "./.ushrc");
+    }
+    rc_fd = open(ushrc, O_RDONLY);
     if (rc_fd < 0) 
     {
-	shell_interactive = 1;
-	perror("Open ~/.ushrc"); 
+        shell_interactive = 1;
+        fprintf(stderr, "%s: %s\n", strerror(errno), ushrc); 
     } else {
-	
-	while (!feof(fp))
-	{
-	    p = parse();
-	    if (!strcmp(p->head->args[0],"end")) {
-		freePipe(p);
-		break;
-	    }
-	    prPipe(p, NULL);
-	    freePipe(p);
-	}
-	close(rc_fd);
-	fclose(fp);
-	fflush(stdout);
+        FILE * fp = fdopen(rc_fd, "r");
+        while (!feof(fp))
+        {
+            p = parse();
+            if (!strcmp(p->head->args[0],"end")) {
+                freePipe(p);
+                break;
+            }
+            prPipe(p, NULL);
+            freePipe(p);
+        }
+        close(rc_fd);
+        fclose(fp);
+        fflush(stdout);
+        free(ushrc);
     } 
-	dup2(stdin_copy, 0);
+    dup2(stdin_copy, 0);
 	close(stdin_copy);
 	shell_interactive = 1;
-        disable_signals();
+    disable_signals();
 
 	/*Put the shell in its own process group*/
 	par_pgid = getpid();
 	if (setpgid(par_pgid, par_pgid) < 0) handle_error("setpgid");
-	
-   while (shell_interactive) 
-   {
-       wait_bg();
-       printf("%s%% ", host);
-       fflush(stdout);
-       p = parse();
-       j = create_job(p);
-       prJob(j);
-       freePipe(p);
-   }
+
+    while (shell_interactive) 
+    {
+        wait_bg();
+        printf("%s%% ", host);
+        fflush(stdout);
+        p = parse();
+        while(p) {
+            j = create_job(p);
+            prJob(j);
+            p = p->next;
+        }
+        freePipe(p);
+    }
 }
 
 

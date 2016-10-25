@@ -5,7 +5,7 @@
 
 CC=gcc
 CFLAGS=-g -Wall
-SRC=main.c parse.c utilities.c
+SRC=main.c parse.c utilities.c parse.h
 OBJ=main.o parse.o utilities.o
 
 ush:	$(OBJ)

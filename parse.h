@@ -23,6 +23,9 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <unistd.h>
+#include <sys/time.h>
+#include <sys/resource.h>
+
 
 #define _GNU_SOURCE
 
@@ -71,6 +74,7 @@ struct jobs_t {
     struct jobs_t *next; /*Next job*/
     char user_updated; /*Status is updated to the user*/    
     char * command;
+    int fg; /*Is this job background or foreground*/
     Status status;
 };
 
@@ -78,7 +82,9 @@ typedef struct jobs_t * Job;
 Job first;
 pid_t par_pgid; /*Same as parent(ushell) pid*/
 int shell_interactive;
+int shell_term;
 char * command_str;
+int builtin;
 extern char **environ;
 
 void freePipe(Pipe);
@@ -110,6 +116,10 @@ int killjob(Job j);
 void list_jobs();
 void log_out();
 int change_dir(Cmd c);
+Job find_job(char * num);
+int is_cmd_builtin(Cmd c);
+void execute_builtin(Cmd c, Job j);
+int niceness(Cmd c);
 
 #endif /* PARSE_H */
 /*........................ end of parse.h ...................................*/
