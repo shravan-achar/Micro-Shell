@@ -83,9 +83,7 @@ int is_job_fg(Job j)
     /*This logic returns 0 only if the last command in a job is followed by a &*/
     Pipe p;
     Cmd c;
-//    if (is_job_stopped(j)) return 0; /*Not fg if it is stopped*/
     p = j->first;
-    //while(p->next) p = p->next; Only one pipe is one job
     c = p->head;
     while(c->next) c = c->next;
     if (c->exec == Tamp) return 0;

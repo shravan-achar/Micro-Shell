@@ -224,7 +224,7 @@ void execute_builtin(Cmd c, Job j)
     if (!strcmp(c->args[0], "pwd" ))
         pwd_c(c);
     if (!strcmp(c->args[0], "nice" ))
-        niceness(c);
+        niceness(c, j);
     if (j) j->first->head->completed = 1;
     if (rc < 0) fprintf(stderr, "%s\n", strerror(errno));
 
@@ -251,16 +251,15 @@ void pwd_c(Cmd c)
     free(cur_dir);
 }
 
-int niceness(Cmd c)
+int niceness(Cmd c, Job j)
 {
-    int status, rc = 0;
+    int rc = 0;
     pid_t pid;
-    int num, nowait = 0;
+    int num;
 
-    if (c->exec == Tamp){
-        nowait = 1;
+    if (strcmp(j->first->head->args[0], "nice")) {
+        printf("Something is Wrong!");
     }
-
 
     if (c->nargs == 1)
     {
@@ -282,11 +281,11 @@ int niceness(Cmd c)
                 execvp(c->args[2], &(c->args[2]));
             }
             else {
-                if (nowait)
-                    waitpid(pid, &status, WUNTRACED | WNOHANG);
+                c->pid = pid;
+                if (is_job_fg(j))
+                    run_in_fg(j);
                 else
-                    waitpid(pid, &status, WUNTRACED);
-                if (pid > 0) change_proc_status(pid, status);
+                    run_in_bg(j);
             }
         }
     }
@@ -340,20 +339,16 @@ void list_jobs()
     
     for (j = first; j; j = j->next)
     {
-//        next = j->next;
-//        if (next) 
-//        {
-            if(is_job_stopped(j) && j->status != Killed)
-                fprintf(stdout, "[%ld] \t Stopped \t\t %s\n", (long)j->number, j->command);
-            else if(is_job_completed(j) && j->fg == 0)
-                fprintf(stdout, "[%ld] \t Done \t\t %s\n", (long)j->number, j->command);
-            else if(j->fg == 1 && j->pgid != 0 && j->status != Killed)
-                fprintf(stdout, "[%ld] \t Running \t\t %s\n", (long)j->number, j->command);
-            else if(j->fg == 0 && j->status != Killed) 
-                fprintf(stdout, "[%ld] \t Running \t\t %s\n", (long)j->number, j->command);
-            else if(j->status == Killed)
-                fprintf(stdout, "[%ld] \t Terminated \t\t %s\n", (long)j->number, j->command);
-  //      }
+        if(is_job_stopped(j) && j->status != Killed)
+            fprintf(stdout, "[%ld] \t Stopped \t\t %s\n", (long)j->number, j->command);
+        else if(is_job_completed(j) && j->fg == 0)
+            fprintf(stdout, "[%ld] \t Done \t\t %s\n", (long)j->number, j->command);
+        else if(j->fg == 1 && j->pgid != 0 && j->status != Killed)
+            fprintf(stdout, "[%ld] \t Running \t\t %s\n", (long)j->number, j->command);
+        else if(j->fg == 0 && j->status != Killed) 
+            fprintf(stdout, "[%ld] \t Running \t\t %s\n", (long)j->number, j->command);
+        else if(j->status == Killed)
+            fprintf(stdout, "[%ld] \t Terminated \t\t %s\n", (long)j->number, j->command);
 
     }
     return;

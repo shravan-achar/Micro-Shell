@@ -119,7 +119,7 @@ int change_dir(Cmd c);
 Job find_job(char * num);
 int is_cmd_builtin(Cmd c);
 void execute_builtin(Cmd c, Job j);
-int niceness(Cmd c);
+int niceness(Cmd c, Job j);
 
 #endif /* PARSE_H */
 /*........................ end of parse.h ...................................*/
