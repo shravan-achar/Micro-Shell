@@ -427,9 +427,13 @@ for (i = 0; i < 12; i++)
 
 pid = fork();
 if (pid < 0) return;
-if(pid == 0) execvp("/usr/bin/which", c->args);
+if(pid == 0) {
+    execvp("/usr/bin/which", c->args);
+    c->pid = getpid();
+}
 else 
 {
+    c->pid = pid;
     waitpid(pid, &status, WUNTRACED);
     if (pid > 0) change_proc_status(pid, status);
 
@@ -569,6 +573,8 @@ int main(int argc, char *argv[])
 	par_pgid = getpid();
 	if (setpgid(par_pgid, par_pgid) < 0) handle_error("setpgid");
 
+    tcsetpgrp (shell_term, par_pgid);
+    
     while (shell_interactive) 
     {
         wait_bg();
