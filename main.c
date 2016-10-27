@@ -308,10 +308,6 @@ int niceness(Cmd c, Job j)
     pid_t pid;
     int num;
 
-    if (strcmp(j->first->head->args[0], "nice")) {
-        printf("Something is Wrong!");
-    }
-
     if (c->nargs == 1)
     {
         rc = setpriority(PRIO_PROCESS, getpid(), 4);
