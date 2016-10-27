@@ -4,7 +4,7 @@
 # 
 
 CC=gcc
-CFLAGS=-g -Wall
+CFLAGS=-g
 SRC=main.c parse.c utilities.c parse.h
 OBJ=main.o parse.o utilities.o
 
@@ -12,7 +12,7 @@ ush:	$(OBJ)
 	$(CC) -o $@ $(OBJ)
 
 tar:
-	tar czvf ush.tar.gz $(SRC) Makefile README
+	tar czvf ush.tar.gz $(SRC) Makefile README REFERENCES EXTRA_CREDIT
 
 clean:
 	\rm $(OBJ) ush
