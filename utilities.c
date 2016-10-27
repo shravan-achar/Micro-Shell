@@ -1,4 +1,14 @@
 #include "parse.h"
+int fileRedir_builtin(Cmd c, int flags, int *fd)
+{
+    *fd = openat(AT_FDCWD, c->outfile, flags, 0666);
+    if (*fd < 0)
+    {
+	fprintf(stderr, "%s: %s", c->outfile, strerror(errno));
+	return -1;
+    }
+    return 0;
+}
 
 void fileRedir(Cmd c, int flags)
 {
@@ -41,7 +51,7 @@ int is_job_stopped (Job j)
 	if (!(c->stopped)) return 0;
     }
     //    }
-    j->fg = 0;
+    //j->fg = 0;
     return 1;
 }
 
@@ -63,7 +73,7 @@ int is_job_completed (Job j)
 	if (!(c->completed)) return 0;
     }
     //    }
-    j->fg = 0;
+    //j->fg = 0;
     return 1;
 
 }
@@ -188,7 +198,7 @@ void wait_fg(Job j)
 static Job copy_pipes(Job j, Pipe pip)
 {
     Cmd c, Cnew, Cfirst = NULL, CPrev = NULL;
-    Pipe p = pip, Pnew, Pfirst = NULL, Pprev = NULL;
+    Pipe p = pip, Pnew;
     Pnew = calloc(1, sizeof(*p));
     memcpy(Pnew, p, sizeof(*p));
     Pnew->next = NULL;
@@ -254,14 +264,14 @@ Job find_job(char * num)
 
 }
 
-static void freeJob(Job j)
+/*static void freeJob(Job j)
 {
     if (j == NULL) return;
 
     freePipe(j->first);
     free(j->command);
     free(j);
-}
+}*/
 
 /*Ref https://ftp.gnu.org/old-gnu/Manuals/glibc-2.2.3/html_chapter/libc_27.html */
 
@@ -275,7 +285,7 @@ void clean_finished_jobs()
 	if (is_job_completed(j))
 	{
 	    if (j->fg == 0 && j->pgid != 0 && j->status != Killed)
-		fprintf(stdout, "[%d] \t Done \t\t\t %s\n", j->number, j->command);
+		fprintf(stderr, "[%d] \t Done \t\t\t %s\n", j->number, j->command);
 	    if (last) last->next = j->next;
 	    else first = j->next;
 	    //freeJob(j);
@@ -285,7 +295,7 @@ void clean_finished_jobs()
 	    if (!j->user_updated) 
 	    {
 		if (j->status != Killed)
-		    fprintf(stdout, "[%d] \t Stopped \t\t %s\n", j->pgid, j->command);
+		    fprintf(stderr, "[%d] \t Stopped \t\t %s\n", j->pgid, j->command);
 		j->user_updated = 1;
 	    }
 	    last = j;

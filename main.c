@@ -24,15 +24,71 @@ static void handle_exec_error()
 	case ENOENT:
 	    fprintf(stderr, "command not found\n");
 	    break;
+    default:
+        fprintf(stderr, "%s\n", strerror(errno));
+        break;
     }
 
     _exit(EXIT_FAILURE);
 }
 
+static void manageio(Cmd c, int * prev, int * next, Job j)
+{
+
+    int flags;
+    switch (c->in) {
+        case Tpipe:
+        case TpipeErr:
+            dup2(prev[0], 0);
+            close(prev[0]);
+            close(prev[1]);
+            break;
+        case Tin:
+            flags = O_RDONLY;
+            fileRedir(c, flags);
+            break;
+        default:
+            break;
+
+    }
+
+    switch (c->out) { 
+        case Tnil: 
+            if (execvp(c->args[0], c->args) < 0) handle_exec_error();
+            break;
+
+        case Tpipe:
+        case TpipeErr:
+            {
+                dup2(next[1], 1);
+                if (c->out == TpipeErr) dup2(next[1], 2);
+                close(next[1]);
+                close(next[0]);
+                /*Wow, a pat on my back for the above two lines*/
+            }
+            break;
+        case Tapp:
+        case TappErr:
+            flags = O_RDWR | O_CREAT | O_APPEND;
+            fileRedir(c, flags);
+            break;
+        case ToutErr:
+        case Tout:
+            flags = 0; 
+            flags = O_RDWR | O_CREAT | O_TRUNC;
+            fileRedir(c, flags);
+            break;
+
+        default:
+            break;
+    }
+
+}
+
 static void runCmd(Cmd c, int * prev, int * next, Job j)
 {
     pid_t cpid, pid;
-    int flags;
+    int rc = 0;
     cpid = fork();
 
     if (cpid < 0) perror("fork error");
@@ -48,59 +104,20 @@ static void runCmd(Cmd c, int * prev, int * next, Job j)
 	/*Child can receive all signals*/
     //if (is_job_fg(j))
 	enable_signals();
-	
-    switch (c->in) {
-	    case Tpipe:
-	    case TpipeErr:
-            dup2(prev[0], 0);
-            close(prev[0]);
-            close(prev[1]);
-            break;
-        case Tin:
-            flags = O_RDONLY;
-            fileRedir(c, flags);
-            break;
-	    default:
-		break;
 
-	}
+    manageio(c, prev, next, j);
 
-	switch (c->out) { 
-	    case Tnil: 
-		if (execvp(c->args[0], c->args) < 0) handle_exec_error();
-		break;
-
-	    case Tpipe:
-	    case TpipeErr:
-		{
-		    dup2(next[1], 1);
-		    if (c->out == TpipeErr) dup2(next[1], 2);
-		    close(next[1]);
-		    close(next[0]);
-		    /*Wow, a pat on my back for the above two lines*/
-		}
-		break;
-	    case Tapp:
-	    case TappErr:
-		flags = O_RDWR | O_CREAT | O_APPEND;
-		fileRedir(c, flags);
-		break;
-	    case ToutErr:
-	    case Tout:
-		flags = 0; 
-		flags = O_RDWR | O_CREAT | O_TRUNC;
-		fileRedir(c, flags);
-		break;
-
-	    default:
-		break;
-	}
     if (is_cmd_builtin(c)) {
-        execute_builtin(c, j); 
+        rc = execute_builtin(c, j); 
+        if (rc < 0) kill(SIGKILL, j->pgid);
         _exit(EXIT_SUCCESS);
     }
     else {
-        if(execvp(c->args[0], c->args) < 0) handle_exec_error();
+        if(execvp(c->args[0], c->args) < 0) 
+        {
+            kill(SIGKILL, j->pgid);
+            handle_exec_error();
+        }
     }
 
     } else { 
@@ -113,11 +130,11 @@ static void runCmd(Cmd c, int * prev, int * next, Job j)
 	    setpgid(cpid, j->pgid);
 	}
 
-	if (prev != NULL) 
-	{
-	    close(prev[0]);
-	    close(prev[1]);
-	}
+    if (prev != NULL) 
+    {
+        close(prev[0]);
+        close(prev[1]);
+    }
     }
 }
 
@@ -129,8 +146,8 @@ static void wait_all(Job j)
 int is_cmd_builtin(Cmd c)
 {
     int i;
-    char *list[12] = {"bg", "fg", "cd","pwd","echo","jobs","kill","logout","nice","where", "setenv", "unsetenv"};
-    for (i = 0; i < 12; i++)
+    char *list[13] = {"end", "bg", "fg", "cd","pwd","echo","jobs","kill","logout","nice","where", "setenv", "unsetenv"};
+    for (i = 0; i < 13; i++)
     {
         if (!strcmp(c->args[0], list[i])) 
         {
@@ -195,9 +212,38 @@ void prCmd(Cmd c, Job j, char *buf)
     }
 }
 
-void execute_builtin(Cmd c, Job j)
+int execute_builtin(Cmd c, Job j)
 {
-    int rc = 0;
+    int rc = 0, fd = -1;
+    int flags;
+    if (c->in != Tnil) {
+        printf("No builtin takes input");
+        c->in = Tnil;
+    }
+
+    switch (c->out) {
+        case Tnil:
+            break;
+        case Tapp:
+            flags = O_RDWR | O_CREAT | O_APPEND;
+            rc = fileRedir_builtin(c, flags, &fd);
+        case Tout:
+            flags = O_RDWR | O_CREAT | O_TRUNC;
+            rc = fileRedir_builtin(c, flags, &fd);
+            break;
+        case TappErr:
+            flags = O_RDWR | O_CREAT | O_APPEND;
+            rc = fileRedir_builtin(c, flags, &fd);
+            break;
+        case ToutErr:
+            flags = O_RDWR | O_CREAT | O_TRUNC;
+            rc = fileRedir_builtin(c, flags, &fd);
+            break;
+        default:
+            break;
+    }
+    if (rc != 0) fprintf(stderr, "%s: %s", strerror(errno), c->outfile);
+    if (fd == -1) fd = 1; 
     if (!strcmp(c->args[0], "end") )
         exit(0);
     if (!strcmp(c->args[0], "bg"))
@@ -206,30 +252,31 @@ void execute_builtin(Cmd c, Job j)
         foreground(find_job(c->args[1]));
     }
     if (!strcmp(c->args[0], "setenv" ))
-        rc = set_env(c);
+        rc = set_env(c, &fd);
     if (!strcmp(c->args[0], "unsetenv" ))
         rc = unset_env(c);
     if (!strcmp(c->args[0], "jobs" ))
-        list_jobs();
+        list_jobs(&fd);
     if (!strcmp(c->args[0], "kill" ))
         killjob(find_job(c->args[1]));
     if (!strcmp(c->args[0], "where" ))
-        whereis(c);
+        whereis(c, &fd);
     if (!strcmp(c->args[0], "logout" ))
         log_out();
     if (!strcmp(c->args[0], "cd" ))
         rc = change_dir(c);
     if (!strcmp(c->args[0], "echo" ))
-        echo_c(c);
+        echo_c(c, &fd);
     if (!strcmp(c->args[0], "pwd" ))
-        pwd_c(c);
+        pwd_c(c, &fd);
     if (!strcmp(c->args[0], "nice" ))
         niceness(c, j);
     if (j) j->first->head->completed = 1;
     if (rc < 0) fprintf(stderr, "%s\n", strerror(errno));
-
+    return rc;
 }
-void echo_c(Cmd c)
+
+void echo_c(Cmd c, int * fd)
 {
     char buf[100];
     memset(buf, 0, 100);
@@ -240,14 +287,14 @@ void echo_c(Cmd c)
         n--;
 
     }
-    printf("%s\n", buf);
+    dprintf(*fd, "%s\n", buf);
 }
 
-void pwd_c(Cmd c)
+void pwd_c(Cmd c, int * fd)
 {
     char * cur_dir = calloc(1, 128);
     getcwd(cur_dir, 128);
-    printf("%s\n", cur_dir);
+    dprintf(*fd, "%s\n", cur_dir);
     free(cur_dir);
 }
 
@@ -268,6 +315,7 @@ int niceness(Cmd c, Job j)
     } 
     else {
         sscanf(c->args[1], "%d", &num);
+        printf("%d\n", num);
         if (c->nargs == 2){
             rc = setpriority(PRIO_PROCESS, getpid(), num);
             return rc;
@@ -300,14 +348,19 @@ int change_dir(Cmd c)
     return rc;
 }
 
-int set_env(Cmd c)
+int set_env(Cmd c, int * fd)
 {
     int rc;
     char **l = environ;
     if (c->nargs == 1)
     {
 	int i;
-	for (i = 0; l[i]; i++) printf("%s\n", l[i]);
+	for (i = 0; l[i]; i++) 
+    {
+        if (builtin)
+            dprintf(*fd, "%s\n", l[i]);
+        else printf("%s\n", l[i]);
+    }
     }
     else if (c->nargs == 2)
     {
@@ -329,7 +382,7 @@ int unset_env(Cmd c)
     return rc;
 }
 
-void list_jobs()
+void list_jobs(int * fd)
 {
     Job j;
     if (first->next == NULL) {
@@ -340,15 +393,15 @@ void list_jobs()
     for (j = first; j; j = j->next)
     {
         if(is_job_stopped(j) && j->status != Killed)
-            fprintf(stdout, "[%ld] \t Stopped \t\t %s\n", (long)j->number, j->command);
+            dprintf(*fd, "[%ld] \t Stopped \t\t %s\n", (long)j->number, j->command);
         else if(is_job_completed(j) && j->fg == 0)
-            fprintf(stdout, "[%ld] \t Done \t\t %s\n", (long)j->number, j->command);
+            dprintf(*fd, "[%ld] \t Done \t\t %s\n", (long)j->number, j->command);
         else if(j->fg == 1 && j->pgid != 0 && j->status != Killed)
-            fprintf(stdout, "[%ld] \t Running \t\t %s\n", (long)j->number, j->command);
+            dprintf(*fd, "[%ld] \t Running \t\t %s\n", (long)j->number, j->command);
         else if(j->fg == 0 && j->status != Killed) 
-            fprintf(stdout, "[%ld] \t Running \t\t %s\n", (long)j->number, j->command);
+            dprintf(*fd, "[%ld] \t Running \t\t %s\n", (long)j->number, j->command);
         else if(j->status == Killed)
-            fprintf(stdout, "[%ld] \t Terminated \t\t %s\n", (long)j->number, j->command);
+            dprintf(*fd, "[%ld] \t Terminated \t\t %s\n", (long)j->number, j->command);
 
     }
     return;
@@ -405,7 +458,7 @@ void log_out (Cmd c)
     _exit(EXIT_SUCCESS);
 }
 
-void whereis(Cmd c)
+void whereis(Cmd c, int * fd)
 {
     char *list[12] = {"bg", "fg", "cd","pwd","echo","jobs","kill","logout","nice","where", "setenv", "unsetenv"};
 int i;
@@ -415,8 +468,7 @@ int status;
 for (i = 0; i < 12; i++)
 {
     if(!strcmp(c->args[1], list[i])) {
-        printf("%s: shell built-in command\n", list[i]);
-        return;
+        dprintf(*fd, "%s: shell built-in command\n", list[i]);
     }
 }
 
@@ -584,6 +636,4 @@ int main(int argc, char *argv[])
         freePipe(p);
     }
 }
-
-
 /*........................ end of main.c ....................................*/
