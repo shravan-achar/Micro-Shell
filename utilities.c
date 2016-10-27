@@ -232,7 +232,10 @@ Job create_job(Pipe p)
     while(i < number)
     {
 	last = j;
-	j = j->next;
+	if (j->number == number - 1) {
+	    j = j->next;
+	    break;
+	} else j = j->next;
 	i++;
 
     }

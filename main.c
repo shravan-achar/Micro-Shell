@@ -64,7 +64,7 @@ static void manageio(Cmd c, int * prev, int * next, Job j)
                 if (c->out == TpipeErr) dup2(next[1], 2);
                 close(next[1]);
                 close(next[0]);
-                /*Wow, a pat on my back for the above two lines*/
+                /*Wow, a pat on my back for the above lines*/
             }
             break;
         case Tapp:
@@ -115,7 +115,7 @@ static void runCmd(Cmd c, int * prev, int * next, Job j)
     else {
         if(execvp(c->args[0], c->args) < 0) 
         {
-            kill(SIGKILL, j->pgid);
+            kill(-j->pgid, SIGKILL);
             handle_exec_error();
         }
     }
@@ -159,8 +159,7 @@ int is_cmd_builtin(Cmd c)
 
 void prCmd(Cmd c, Job j, char *buf)
 {
-    int i;
-    i = 0;
+    int i = 0;
     builtin = is_cmd_builtin(c);
     
     if ( c ) {
@@ -204,6 +203,7 @@ void prCmd(Cmd c, Job j, char *buf)
 
 	if (builtin && c->out != Tpipe && c->out != TpipeErr) {
         execute_builtin(c, j);
+        c->completed = 1;
     } else {
         if (builtin) builtin = 0;
     }	
@@ -216,10 +216,6 @@ int execute_builtin(Cmd c, Job j)
 {
     int rc = 0, fd = -1;
     int flags;
-    if (c->in != Tnil) {
-        printf("No builtin takes input");
-        c->in = Tnil;
-    }
 
     switch (c->out) {
         case Tnil:
@@ -271,7 +267,7 @@ int execute_builtin(Cmd c, Job j)
         pwd_c(c, &fd);
     if (!strcmp(c->args[0], "nice" ))
         niceness(c, j);
-    if (j) j->first->head->completed = 1;
+    //if (j) j->first->head->completed = 1;
     if (rc < 0) fprintf(stderr, "%s\n", strerror(errno));
     return rc;
 }
@@ -283,18 +279,26 @@ void echo_c(Cmd c, int * fd)
     int n = c->nargs - 1;
     while(n)
     {
-        sprintf(buf+strlen(buf),"%s ",c->args[c->nargs - n]);
+        memcpy(buf+strlen(buf),c->args[c->nargs - n], strlen(c->args[c->nargs - n]));
+        //snprintf(buf + strlen(buf), strlen(c->args[c->nargs - n]), "%s", buf);
         n--;
+        if (n > 0) buf[strlen(buf)] = ' '; /* space character */
 
     }
-    dprintf(*fd, "%s\n", buf);
+    buf[strlen(buf)] = '\n';
+    if (builtin || c->out != Tnil)
+        write(*fd, buf, strlen(buf));
+    //dprintf(*fd, "%s\n", buf);
+    else printf("%s\n", buf);
 }
 
 void pwd_c(Cmd c, int * fd)
 {
     char * cur_dir = calloc(1, 128);
     getcwd(cur_dir, 128);
+    if (builtin)
     dprintf(*fd, "%s\n", cur_dir);
+    else printf("%s\n", cur_dir);
     free(cur_dir);
 }
 
@@ -314,9 +318,8 @@ int niceness(Cmd c, Job j)
         return rc;
     } 
     else {
-        sscanf(c->args[1], "%d", &num);
-        printf("%d\n", num);
-        if (c->nargs == 2){
+        rc = sscanf(c->args[1], "%d", &num);
+        if (rc && c->nargs == 2) {
             rc = setpriority(PRIO_PROCESS, getpid(), num);
             return rc;
 
@@ -325,8 +328,13 @@ int niceness(Cmd c, Job j)
             pid = fork();
             if (pid < 0) return -1;
             if (pid == 0) {
-                rc = setpriority(PRIO_PROCESS, getpid(), num); 
-                execvp(c->args[2], &(c->args[2]));
+                if (rc != 0) { 
+                    rc = setpriority(PRIO_PROCESS, getpid(), num); 
+                    execvp(c->args[2], &(c->args[2]));
+                } else {
+                    rc = setpriority(PRIO_PROCESS, getpid(), 4);
+                    execvp(c->args[1], &(c->args[1]));
+                } 
             }
             else {
                 c->pid = pid;
@@ -396,9 +404,9 @@ void list_jobs(int * fd)
             dprintf(*fd, "[%ld] \t Stopped \t\t %s\n", (long)j->number, j->command);
         else if(is_job_completed(j) && j->fg == 0)
             dprintf(*fd, "[%ld] \t Done \t\t %s\n", (long)j->number, j->command);
-        else if(j->fg == 1 && j->pgid != 0 && j->status != Killed)
-            dprintf(*fd, "[%ld] \t Running \t\t %s\n", (long)j->number, j->command);
-        else if(j->fg == 0 && j->status != Killed) 
+        //else if(j->fg == 1 && j->pgid != 0 && j->status != Killed)
+        //    dprintf(*fd, "[%ld] \t Running \t\t %s\n", (long)j->number, j->command);
+        else if(j->fg == 0 && j->status == Running) 
             dprintf(*fd, "[%ld] \t Running \t\t %s\n", (long)j->number, j->command);
         else if(j->status == Killed)
             dprintf(*fd, "[%ld] \t Terminated \t\t %s\n", (long)j->number, j->command);
@@ -503,7 +511,7 @@ void enable_signals(void)
 void disable_signals(void) 
 {
 
-    //signal (SIGINT, SIG_IGN);
+    signal (SIGINT, SIG_IGN);
     signal (SIGQUIT, SIG_IGN);
     signal (SIGTSTP, SIG_IGN);
     signal (SIGTTIN, SIG_IGN);
